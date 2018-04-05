@@ -1,0 +1,111 @@
+﻿#pragma enable_d3d11_debug_symbols
+RWTexture3D<float4> InputTex;
+RWStructuredBuffer<float> outBuf : register(u1);
+#define DIM  127.0;
+#define RADIUS  0.004;
+#define HALFDIM  (127.0 / 2) + 0.5f;
+static const float FREQUENCY = 3.0 / 128.0;
+uniform float3 _Pos = float3(0.5f,0.1f,0.5f);
+uniform float _Padding = 0.0;//1.0f;
+uniform float _WorldTime;
+
+float3 hash( float3 p ) 
+{
+	p = float3( dot(p,float3(127.1,311.7, 74.7)),
+			  dot(p,float3(269.5,183.3,246.1)),
+			  dot(p,float3(113.5,271.9,124.6)));
+
+	return -1.0 + 2.0*frac(sin(p)*43758.5453123);
+}
+
+float noise( in float3 x)
+{
+    // grid
+    float3 p = floor(x);
+    float3 w = frac(x);
+    
+    // quintic interpolant
+    float3 u = w*w*w*(w*(w*6.0-15.0)+10.0);
+
+    
+    // gradients
+    float3 ga = hash( p+float3(0.0,0.0,0.0) );
+    float3 gb = hash( p+float3(1.0,0.0,0.0) );
+    float3 gc = hash( p+float3(0.0,1.0,0.0) );
+    float3 gd = hash( p+float3(1.0,1.0,0.0) );
+    float3 ge = hash( p+float3(0.0,0.0,1.0) );
+    float3 gf = hash( p+float3(1.0,0.0,1.0) );
+    float3 gg = hash( p+float3(0.0,1.0,1.0) );
+    float3 gh = hash( p+float3(1.0,1.0,1.0) );
+    
+    // projections
+    float va = dot( ga, w-float3(0.0,0.0,0.0) );
+    float vb = dot( gb, w-float3(1.0,0.0,0.0) );
+    float vc = dot( gc, w-float3(0.0,1.0,0.0) );
+    float vd = dot( gd, w-float3(1.0,1.0,0.0) );
+    float ve = dot( ge, w-float3(0.0,0.0,1.0) );
+    float vf = dot( gf, w-float3(1.0,0.0,1.0) );
+    float vg = dot( gg, w-float3(0.0,1.0,1.0) );
+    float vh = dot( gh, w-float3(1.0,1.0,1.0) );
+	
+    // interpolation
+    return va + 
+           u.x*(vb-va) + 
+           u.y*(vc-va) + 
+           u.z*(ve-va) + 
+           u.x*u.y*(va-vb-vc+vd) + 
+           u.y*u.z*(va-vc-ve+vg) + 
+           u.z*u.x*(va-vb-ve+vf) + 
+           u.x*u.y*u.z*(-va+vb+vc-vd+ve-vf-vg+vh);
+}
+
+float fbm( in float3 coord, int octaves )
+{
+    float f = 1.99;
+    float ampfactor = 0.707;// 0.5
+    float returnVal = 0.1;
+    float amplitude = 0.5;
+	float noiseVal = 0;
+
+	const float3x3 m3  = float3x3( 0.00,  0.80,  0.60,
+                      -0.80,  0.36, -0.48,
+                      -0.60, -0.48,  0.64 );
+
+    for( int i=0; i<octaves; i++ )
+    {
+        noiseVal = noise(coord);
+        returnVal += amplitude*noiseVal;
+        amplitude *= ampfactor;
+        coord = mul(f*m3, coord);
+    }
+	return returnVal;
+}
+
+#define NUM_THREADS 8
+#pragma kernel Pyroclastic
+#pragma kernel Pyro2
+[numthreads(NUM_THREADS,NUM_THREADS,NUM_THREADS)]
+void Pyroclastic (uint3 id : SV_DispatchThreadID)
+{
+	//float3 pos = id/(DIM);// - _Pos.xyz;
+	float3 pos = id;
+	float3 dPos = pos - HALFDIM;//64.5f;	
+	float off = abs(fbm((pos * FREQUENCY), 8));
+	float len = sqrt(dPos.x*dPos.x + dPos.y*dPos.y + dPos.z*dPos.z);
+	float centerDist = len / DIM;
+	float fill = centerDist - off;
+	InputTex[id.xyz] = float4(step(fill, 0.025f), 0,0,0);
+
+}
+[numthreads(NUM_THREADS,NUM_THREADS,NUM_THREADS)]
+void Pyro2 (uint3 id : SV_DispatchThreadID)
+{
+	float3 pos = id;
+	float radius = 32;
+	float pyroclasticDensity = max(radius - abs(pos/radius) + abs(fbm(pos, 4)), 0);
+	float density = smoothstep(pyroclasticDensity,0, 0.05) ;
+
+    
+	InputTex[id.xyz] = float4(density, 0,0,0);
+
+}
